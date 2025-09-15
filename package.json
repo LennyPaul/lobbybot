@@ -1,0 +1,22 @@
+{
+  "name": "bot_discord_anis",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+     "dev": "node src/index.js",
+     "deploy:cmd": "node src/deploy-commands.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "discord.js": "^14.22.1",
+    "dotenv": "^17.2.2",
+    "mongodb": "^6.19.0",
+    "zod": "^4.1.8"
+  }
+}
+
