@@ -26,6 +26,16 @@ function clearTimers(matchId) {
   if (i) { clearInterval(i); tickIntervals.delete(matchId); }
 }
 
+function buildCaptainVoteComponents(matchId) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`capvote_A_${matchId}`).setLabel("Équipe A a gagné").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`capvote_B_${matchId}`).setLabel("Équipe B a gagné").setStyle(ButtonStyle.Danger),
+    ),
+  ];
+}
+
+
 export async function getVetoConfig() {
   const cfg = await col("config").findOne({ _id: "veto" });
   return {
@@ -305,20 +315,27 @@ async function applyBan(client, matchId, mapName, byUserId = null, isAuto = fals
       }
 
       // === Message #3 : “Bonne game” + système de vote ===
-      const voteRows = [
-        new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`vote_A_${matchId}`).setLabel("Vote Équipe A").setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId(`vote_B_${matchId}`).setLabel("Vote Équipe B").setStyle(ButtonStyle.Danger),
-        ),
-      ];
-      await thread.send({
-        content:
-          `**Bonne game à tous !** 🎮\n` +
-          `À la fin du match, merci de **voter** pour l’équipe gagnante ci-dessous.\n` +
-          `> Le résultat est validé quand **6/10** joueurs ont voté pour la même équipe.\n` +
-          `> L’Elo est ensuite **mis à jour automatiquement** pour tous les joueurs.`,
-        components: voteRows,
-      });
+const voteRows = buildCaptainVoteComponents(matchId);
+
+const voteMsg = await thread.send({
+  embeds: [
+    new EmbedBuilder()
+      .setTitle(`Match #${matchId} — Lancement !`)
+      .setDescription(
+        `**Bonne game à tous !** 🎮\n` +
+        `À la fin de la partie, **seuls les CAPITAINES** votent ci-dessous.\n` +
+        `- Si les 2 votes **coïncident**, la victoire est validée automatiquement.\n` +
+        `- En cas de **désaccord**, le match part en **review admin**.`
+      )
+  ],
+  components: voteRows,
+});
+
+// on mémorise la map choisie + l’ID du message de vote dans la collection matches
+await col("matches").updateOne(
+  { matchId },
+  { $set: { pickedMap: picked, voteMessageId: voteMsg.id, updatedAt: new Date() } }
+);
     } catch {}
     return;
   }

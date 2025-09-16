@@ -12,7 +12,6 @@ import { tryStartMatch } from "./matchFlow.js";
 /** ==================== CONFIG ==================== **/
 const DEFAULT_READY_SECONDS = 60;
 
-// Timers côté process pour un seul ready-check actif
 const rcIntervals = new Map(); // rcId -> setInterval
 const rcTimeouts = new Map();  // rcId -> setTimeout
 
@@ -26,11 +25,12 @@ function clearRcTimers(rcId) {
 async function getQueueConfig() {
   const cfg = await col("config").findOne({ _id: "queue" });
   return {
+    readyEnabled: cfg?.readyEnabled ?? true,
     readySeconds: Number.isFinite(cfg?.readySeconds) ? cfg.readySeconds : DEFAULT_READY_SECONDS,
   };
 }
 
-/** ==================== UI: Queue Panel ==================== **/
+/** ==================== UI: Panneau de queue ==================== **/
 function queueComponentsNormal() {
   return [
     new ActionRowBuilder().addComponents(
@@ -40,81 +40,159 @@ function queueComponentsNormal() {
   ];
 }
 
-function queueEmbedNormal(current) {
+async function queueEmbedNormal() {
+  const current = await col("queue").find().sort({ joinedAt: 1 }).toArray();
+  const { readyEnabled } = await getQueueConfig();
   const count = current.length;
   const preview = current.slice(0, 10).map((q, i) => `${i + 1}. <@${q.userId}>`).join("\n");
   return new EmbedBuilder()
     .setTitle("File d’attente — Valorant (5v5)")
-    .setDescription(`**${count}/10** joueurs dans la file.\nUne validation de présence est requise avant le lancement.`)
+    .setDescription(
+      `**${count}/10** joueurs en file.\n` +
+      (readyEnabled
+        ? "Un **ready-check** sera lancé pour les 10 premiers."
+        : "La partie se **lance automatiquement** dès qu’il y a **10 joueurs**.")
+    )
     .addFields({ name: "En file (ordre d’arrivée)", value: preview || "—" })
     .setFooter({ text: "Clique sur les boutons pour rejoindre/partir." });
 }
 
-/** ====== Ready Check Rendering ====== */
-function queueEmbedReadyCheck(rc, now = Date.now()) {
-  const secondsLeft = Math.max(0, Math.ceil((new Date(rc.deadline).getTime() - now) / 1000));
-  const confirmedSet = new Set(rc.confirmedIds);
-  const lines = rc.userIds.map((u) => {
-    const ok = confirmedSet.has(u);
-    return `${ok ? "✅" : "⏳"} <@${u}>`;
-  }).join("\n");
+export async function refreshQueuePanel(client) {
+  const cfg = await col("config").findOne({ _id: "queuePanel" });
+  if (!cfg?.channelId || !cfg?.messageId) return;
+
+  const channel = await client.channels.fetch(cfg.channelId).catch(() => null);
+  if (!channel) return;
+
+  const msg = await channel.messages.fetch(cfg.messageId).catch(() => null);
+  const embed = await queueEmbedNormal();
+  const components = queueComponentsNormal();
+
+  if (msg) {
+    await msg.edit({ embeds: [embed], components });
+  } else {
+    const sent = await channel.send({ embeds: [embed], components });
+    await col("config").updateOne({ _id: "queuePanel" }, { $set: { messageId: sent.id } }, { upsert: true });
+  }
+}
+
+/** ==================== Ready-check status (séparé du panneau) ==================== **/
+function rcStatusEmbed(rc) {
+  const secondsLeft = Math.max(0, Math.ceil((new Date(rc.deadline).getTime() - Date.now()) / 1000));
+  const confirmed = new Set(rc.confirmedIds || []);
+  const lines = rc.userIds.map(u => `${confirmed.has(u) ? "✅" : "⏳"} <@${u}>`).join("\n");
 
   return new EmbedBuilder()
-    .setTitle("Validation de présence — 10/10 requis")
+    .setTitle(`Ready-check — ${rc.confirmedIds.length}/10 confirmés`)
     .setDescription(
-      `Clique **Valider ma présence** ci-dessous pour recevoir ton bouton **Je suis prêt** en privé (éphémère).\n` +
-      `**Temps restant : ${secondsLeft}s** — Confirmés : **${rc.confirmedIds.length}/10**`
+      `Chaque joueur a reçu un **DM** avec un bouton “Je suis prêt ✅”.\n` +
+      `**Temps restant : ${secondsLeft}s**\n` +
+      `La partie se crée dès que **10/10** sont confirmés.`
     )
     .addFields({ name: "Joueurs", value: lines || "—" })
-    .setFooter({ text: "La partie démarre dès que 10/10 sont confirmés." });
+    .setFooter({ text: "Ce message s’actualise automatiquement." });
 }
 
-function queueComponentsReadyCheck(rc) {
-  // Un seul bouton public qui ouvre un message éphémère personnel
-  return [
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`rc_open_${rc.rcId}`)
-        .setLabel("Valider ma présence")
-        .setStyle(ButtonStyle.Primary)
-    ),
-  ];
+async function upsertRcStatusMessage(client, rc) {
+  const cfg = await col("config").findOne({ _id: "queuePanel" });
+  if (!cfg?.channelId) return null;
+  const channel = await client.channels.fetch(cfg.channelId).catch(() => null);
+  if (!channel) return null;
+
+  const embed = rcStatusEmbed(rc);
+  if (rc.statusMessageId) {
+    const msg = await channel.messages.fetch(rc.statusMessageId).catch(() => null);
+    if (msg) {
+      await msg.edit({ embeds: [embed], components: [] });
+      return msg.id;
+    }
+  }
+  const sent = await channel.send({ embeds: [embed] });
+  return sent.id;
 }
 
-/** ============ Helpers Ready-Check ============ */
+async function deleteRcStatusMessage(client, rc) {
+  if (!rc?.statusMessageId) return;
+  try {
+    const cfg = await col("config").findOne({ _id: "queuePanel" });
+    if (!cfg?.channelId) return;
+    const channel = await client.channels.fetch(cfg.channelId).catch(() => null);
+    if (!channel) return;
+    const msg = await channel.messages.fetch(rc.statusMessageId).catch(() => null);
+    if (msg) await msg.delete().catch(() => {});
+  } catch {}
+}
+
+/** ==================== Ready-check: DM aux joueurs ==================== **/
+function buildReadyDmRow(rcId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`rc_confirm_${rcId}`)
+      .setLabel("Je suis prêt ✅")
+      .setStyle(ButtonStyle.Success)
+  );
+}
+
+async function notifyPlayersViaDM(client, rc) {
+  const row = buildReadyDmRow(rc.rcId);
+  const secondsLeft = Math.max(0, Math.ceil((new Date(rc.deadline).getTime() - Date.now()) / 1000));
+  const text =
+    `Tu as été sélectionné pour un match perso.\n` +
+    `Clique sur le bouton ci-dessous pour **valider ta présence**.\n` +
+    `Temps restant : **${secondsLeft}s**.`;
+
+  for (const userId of rc.userIds) {
+    if (userId.startsWith("f_")) continue; // pas de DM pour fakes
+    try {
+      const user = await client.users.fetch(userId);
+      const dm = await user.createDM();
+      await dm.send({ content: text, components: [row] });
+    } catch {
+      // DM fermés : on ignore
+    }
+  }
+}
+
+/** ==================== Lancement / cycle du Ready-check ==================== **/
 function newRcId() {
   return `${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
 }
 
 async function startReadyCheck(client) {
-  // pas de RC si déjà en cours
   const already = await col("ready_checks").findOne({ status: "pending" });
   if (already) return true;
 
-  // prend un snapshot des 10 premiers
   const list = await col("queue").find().sort({ joinedAt: 1 }).limit(10).toArray();
   if (list.length < 10) return false;
 
-  const userIds = list.map((x) => x.userId);
+  const userIds = list.map(x => x.userId);
   const { readySeconds } = await getQueueConfig();
-  const cfg = await col("config").findOne({ _id: "queuePanel" });
-  if (!cfg?.channelId || !cfg?.messageId) return false;
 
   const rcDoc = {
     rcId: newRcId(),
     status: "pending",
     userIds,
     confirmedIds: [],
-    channelId: cfg.channelId,
-    messageId: cfg.messageId,
     createdAt: new Date(),
     deadline: new Date(Date.now() + readySeconds * 1000),
+    statusMessageId: null,
   };
   await col("ready_checks").insertOne(rcDoc);
 
-  // timers UI + expiration
+  const id = await upsertRcStatusMessage(client, rcDoc).catch(() => null);
+  if (id) {
+    await col("ready_checks").updateOne({ rcId: rcDoc.rcId }, { $set: { statusMessageId: id } });
+    rcDoc.statusMessageId = id;
+  }
+
+  await notifyPlayersViaDM(client, rcDoc);
+
   const interval = setInterval(async () => {
-    try { await refreshQueuePanel(client); } catch {}
+    try {
+      const fresh = await col("ready_checks").findOne({ rcId: rcDoc.rcId });
+      if (!fresh || fresh.status !== "pending") return clearRcTimers(rcDoc.rcId);
+      await upsertRcStatusMessage(client, fresh);
+    } catch {}
   }, 1000);
   rcIntervals.set(rcDoc.rcId, interval);
 
@@ -123,7 +201,6 @@ async function startReadyCheck(client) {
   }, readySeconds * 1000);
   rcTimeouts.set(rcDoc.rcId, timeout);
 
-  await refreshQueuePanel(client);
   return true;
 }
 
@@ -133,9 +210,8 @@ async function expireReadyCheck(client, rcId) {
   if (!rc || rc.status !== "pending") return;
 
   const confirmedSet = new Set(rc.confirmedIds);
-  const unconfirmed = rc.userIds.filter((u) => !confirmedSet.has(u));
+  const unconfirmed = rc.userIds.filter(u => !confirmedSet.has(u));
 
-  // Retire les non-confirmés de la file (s’ils y sont encore)
   if (unconfirmed.length) {
     await col("queue").deleteMany({ userId: { $in: unconfirmed } });
   }
@@ -145,8 +221,36 @@ async function expireReadyCheck(client, rcId) {
     { $set: { status: "expired", endedAt: new Date() } }
   );
 
+  await deleteRcStatusMessage(client, rc).catch(() => {});
   await refreshQueuePanel(client);
   try { await maybeLaunchReadyCheckOrStart(client); } catch {}
+}
+
+/** 🔒 Upsert + place VRAIMENT les 10 joueurs du RC en tête de file */
+async function ensureRcUsersAtFront(userIds) {
+  const now = new Date();
+  const bulkUpsert = col("queue").initializeUnorderedBulkOp();
+  for (const u of userIds) {
+    bulkUpsert.find({ userId: u }).upsert().updateOne({
+      $setOnInsert: { userId: u, joinedAt: now },
+    });
+  }
+  try { await bulkUpsert.execute(); } catch {}
+
+  const far = new Date(Date.now() + 365 * 24 * 3600 * 1000); // +1 an
+  await col("queue").updateMany({ userId: { $nin: userIds } }, { $set: { joinedAt: far } });
+
+  const base = new Date(0).getTime();
+  const bulkOrder = col("queue").initializeUnorderedBulkOp();
+  userIds.forEach((u, idx) => {
+    bulkOrder.find({ userId: u }).updateOne({ $set: { joinedAt: new Date(base + idx) } });
+  });
+  try { await bulkOrder.execute(); } catch {}
+
+  const top = await col("queue").find().sort({ joinedAt: 1 }).limit(10).toArray();
+  const topIds = top.map(x => x.userId);
+  const ok = userIds.length === topIds.length && userIds.every((u, i) => u === topIds[i]);
+  return ok;
 }
 
 async function completeReadyCheck(client, rcId) {
@@ -154,76 +258,34 @@ async function completeReadyCheck(client, rcId) {
   const rc = await col("ready_checks").findOne({ rcId });
   if (!rc || rc.status !== "pending") return;
 
-  // priorité : on “met en tête” ces 10 joueurs en ajustant leurs joinedAt
-  const base = new Date("2000-01-01T00:00:00.000Z").getTime();
-  const bulk = col("queue").initializeUnorderedBulkOp();
-  rc.userIds.forEach((u, idx) => {
-    bulk.find({ userId: u }).updateOne({ $set: { joinedAt: new Date(base + idx) } });
-  });
-  try { if (bulk.length) await bulk.execute(); } catch {}
+  const ok = await ensureRcUsersAtFront(rc.userIds);
+  if (!ok) console.warn("[ready-check] ensureRcUsersAtFront mismatch — on tente quand même.");
 
   await col("ready_checks").updateOne(
     { rcId },
     { $set: { status: "complete", endedAt: new Date() } }
   );
 
+  await deleteRcStatusMessage(client, rc).catch(() => {});
   await refreshQueuePanel(client);
-  // 🚀 On ne crée la game que maintenant :
+
   await tryStartMatch(client);
 }
 
-/** ============ Export public : déclencheur auto ============ */
+/** ============ Déclencheur auto ============ */
 export async function maybeLaunchReadyCheckOrStart(client) {
-  // si un RC est en cours, ne rien faire
-  const pending = await col("ready_checks").findOne({ status: "pending" });
-  if (pending) return;
+  const { readyEnabled } = await getQueueConfig();
 
-  // si <10 joueurs → rien
+  const pending = await col("ready_checks").findOne({ status: "pending" });
+  if (readyEnabled && pending) return;
+
   const count = await col("queue").countDocuments();
   if (count < 10) return;
 
-  // sinon lancer un RC
-  await startReadyCheck(client);
-}
-
-/** ============ Public API: refreshQueuePanel ============ */
-export async function refreshQueuePanel(client) {
-  const cfg = await col("config").findOne({ _id: "queuePanel" });
-  if (!cfg?.channelId || !cfg?.messageId) return;
-
-  const channel = await client.channels.fetch(cfg.channelId).catch(() => null);
-  if (!channel) return;
-
-  const msg = await channel.messages.fetch(cfg.messageId).catch(() => null);
-
-  // Y a-t-il un ready-check actif ?
-  const rc = await col("ready_checks").findOne({ status: "pending" });
-  if (rc) {
-    const embed = queueEmbedReadyCheck(rc);
-    const components = queueComponentsReadyCheck(rc);
-    if (msg) {
-      await msg.edit({ embeds: [embed], components });
-    } else {
-      const sent = await channel.send({ embeds: [embed], components });
-      await col("config").updateOne({ _id: "queuePanel" }, { $set: { messageId: sent.id } }, { upsert: true });
-    }
-    return;
-  }
-
-  // Sinon, affichage normal
-  const current = await col("queue").find().sort({ joinedAt: 1 }).toArray();
-  const embed = queueEmbedNormal(current);
-  const components = queueComponentsNormal();
-  if (msg) {
-    await msg.edit({ embeds: [embed], components });
+  if (readyEnabled) {
+    await startReadyCheck(client);
   } else {
-    const sent = await channel.send({ embeds: [embed], components });
-    await col("config").updateOne({ _id: "queuePanel" }, { $set: { messageId: sent.id } }, { upsert: true });
-  }
-
-  // Si on a 10+ joueurs et aucun RC → lancer
-  if (current.length >= 10) {
-    try { await maybeLaunchReadyCheckOrStart(client); } catch {}
+    await tryStartMatch(client);
   }
 }
 
@@ -234,11 +296,10 @@ export async function handleSetup(interaction) {
     return interaction.reply({ content: "Je ne peux pas envoyer de messages ici.", ephemeral: true });
   }
 
-  const current = await col("queue").find().sort({ joinedAt: 1 }).toArray();
-  const embed = queueEmbedNormal(current);
+  const embed = await queueEmbedNormal();
   const components = queueComponentsNormal();
-
   const sent = await channel.send({ embeds: [embed], components });
+
   await col("config").updateOne(
     { _id: "queuePanel" },
     { $set: { channelId: channel.id, messageId: sent.id, updatedAt: new Date() } },
@@ -252,33 +313,7 @@ export async function handleSetup(interaction) {
 export async function handleQueueButtons(interaction, client) {
   const id = interaction.customId;
 
-  // === READY: ouvrir l’éphémère ===
-  if (id.startsWith("rc_open_")) {
-    const rcId = id.substring("rc_open_".length);
-    const rc = await col("ready_checks").findOne({ rcId, status: "pending" });
-    if (!rc) {
-      return interaction.reply({ content: "Ready-check expiré ou introuvable.", ephemeral: true });
-    }
-    if (!rc.userIds.includes(interaction.user.id)) {
-      return interaction.reply({ content: "Tu ne fais pas partie de ces 10 joueurs.", ephemeral: true });
-    }
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`rc_confirm_${rcId}`)
-        .setLabel("Je suis prêt ✅")
-        .setStyle(ButtonStyle.Success)
-    );
-
-    const secondsLeft = Math.max(0, Math.ceil((new Date(rc.deadline).getTime() - Date.now()) / 1000));
-    return interaction.reply({
-      content: `Valide ta présence pour ce match (temps restant **${secondsLeft}s**).`,
-      components: [row],
-      ephemeral: true,
-    });
-  }
-
-  // === READY: confirmer dans l’éphémère ===
+  // === READY CONFIRM depuis DM ===
   if (id.startsWith("rc_confirm_")) {
     const rcId = id.substring("rc_confirm_".length);
     const rc = await col("ready_checks").findOne({ rcId, status: "pending" });
@@ -290,20 +325,23 @@ export async function handleQueueButtons(interaction, client) {
       return interaction.reply({ content: "Tu ne fais pas partie de ces 10 joueurs.", ephemeral: true });
     }
     if (rc.confirmedIds.includes(userId)) {
-      return interaction.update({ content: "Déjà validé ✅", components: [] });
+      return interaction.reply({ content: "Déjà validé ✅", ephemeral: true });
     }
 
-    const updated = await col("ready_checks").findOneAndUpdate(
+    await col("ready_checks").updateOne(
       { rcId, status: "pending" },
-      { $addToSet: { confirmedIds: userId }, $set: { updatedAt: new Date() } },
-      { returnDocument: "after" }
+      { $addToSet: { confirmedIds: userId }, $set: { updatedAt: new Date() } }
     );
 
-    try { await interaction.update({ content: "Présence validée ✅", components: [] }); } catch {}
-    try { await refreshQueuePanel(client); } catch {}
+    const fresh = await col("ready_checks").findOne({ rcId });
+    const need = new Set((fresh?.userIds ?? []).map(String));
+    const confirmed = new Set((fresh?.confirmedIds ?? []).map(String));
+    const allOk = need.size > 0 && [...need].every(u => confirmed.has(u));
 
-    const allOk = updated?.value && updated.value.userIds.every(u => updated.value.confirmedIds.includes(u));
-    if (allOk) {
+    try { await interaction.reply({ content: "Présence validée ✅", ephemeral: true }); } catch {}
+    try { await upsertRcStatusMessage(client, fresh); } catch {}
+
+    if (allOk && fresh?.status === "pending") {
       await completeReadyCheck(client, rcId);
     }
     return;
@@ -316,7 +354,6 @@ export async function handleQueueButtons(interaction, client) {
 
   try {
     if (id === "queue_join") {
-      // check déjà en match actif ?
       const active = await col("match_players").aggregate([
         { $match: { userId } },
         { $lookup: { from: "matches", localField: "matchId", foreignField: "matchId", as: "m" } },
@@ -364,16 +401,52 @@ export async function handleQueueButtons(interaction, client) {
   }
 }
 
-/** ==================== Commande admin: config du ready-time ==================== */
+/** ==================== Commande admin: config queue ====================
+ * /queue_settings enabled:<bool?> ready_seconds:<int?>
+ */
 export async function handleQueueReadyConfig(interaction) {
-  const secs = interaction.options.getInteger("ready_seconds", true);
-  if (secs < 10 || secs > 600) {
-    return interaction.reply({ content: "Valeur invalide. Choisis entre 10 et 600 secondes.", ephemeral: true });
+  // ✅ répond tout de suite pour éviter "application ne répond plus"
+  await interaction.deferReply({ ephemeral: true });
+
+  const enabledOpt = interaction.options.getBoolean("enabled"); // peut être null
+  const secsOpt = interaction.options.getInteger("ready_seconds"); // peut être null
+
+  if (enabledOpt === null && secsOpt === null) {
+    return interaction.editReply("Aucun paramètre fourni. Rien n’a été changé.");
   }
+
+  const update = {};
+  if (enabledOpt !== null) update.readyEnabled = enabledOpt;
+  if (Number.isInteger(secsOpt)) {
+    if (secsOpt < 10 || secsOpt > 600) {
+      return interaction.editReply("Valeur invalide pour ready_seconds (10..600).");
+    }
+    update.readySeconds = secsOpt;
+  }
+
   await col("config").updateOne(
     { _id: "queue" },
-    { $set: { readySeconds: secs, updatedAt: new Date() } },
+    { $set: { ...update, updatedAt: new Date() } },
     { upsert: true }
   );
-  return interaction.reply({ content: `⏱️ Délai de validation fixé à **${secs}s**.`, ephemeral: true });
+
+  // Si on désactive le RC, on arrête proprement celui en cours
+  if (enabledOpt === false) {
+    const rc = await col("ready_checks").findOne({ status: "pending" });
+    if (rc) {
+      clearRcTimers(rc.rcId);
+      await deleteRcStatusMessage(interaction.client, rc).catch(() => {});
+      await col("ready_checks").updateOne({ rcId: rc.rcId }, { $set: { status: "expired", endedAt: new Date() } });
+    }
+  }
+
+  const cfg = await getQueueConfig();
+  await interaction.editReply(
+    `Config file mise à jour ✅\n` +
+    `- Ready-check: **${cfg.readyEnabled ? "activé" : "désactivé"}**\n` +
+    `- Délai ready: **${cfg.readySeconds}s**`
+  );
+
+  // Lancer/relancer suivant nouvelle config si on a 10+
+  try { await maybeLaunchReadyCheckOrStart(interaction.client); } catch {}
 }

@@ -3,34 +3,49 @@ import { REST, Routes, SlashCommandBuilder } from "discord.js";
 
 const commands = [
   // File d'attente / setup
-  new SlashCommandBuilder()
-    .setName("setup")
-    .setDescription("Poste le panneau de file d’attente (admin)"),
+new SlashCommandBuilder()
+  .setName("setup")
+  .setDescription("Poste le panneau de file d’attente (admin)"),
 
-  new SlashCommandBuilder()
-    .setName("fill")
-    .setDescription("Ajoute N joueurs factices à la file (admin, dev)")
-    .addIntegerOption(opt =>
-      opt.setName("n")
-        .setDescription("Nombre à ajouter (1-10)")
-        .setRequired(false)
-        .setMinValue(1)
-        .setMaxValue(10)
-    ),
+new SlashCommandBuilder()
+  .setName("fill")
+  .setDescription("Remplir la file pour tester (avec membres et/ou fakes)")
+  .addIntegerOption(o =>
+    o.setName("count")
+      .setDescription("Nombre à ajouter (défaut 10)")
+      .setMinValue(1)
+      .setMaxValue(10)
+      .setRequired(false)
+  )
+  .addBooleanOption(o =>
+    o.setName("use_fakes")
+      .setDescription("Compléter avec des faux joueurs si besoin (défaut: oui)")
+      .setRequired(false)
+  )
+  .addBooleanOption(o =>
+    o.setName("auto_confirm_fakes")
+      .setDescription("Confirmer automatiquement les fakes dans le ready-check")
+      .setRequired(false)
+  ),
 
 new SlashCommandBuilder()
     .setName("clearqueue")
     .setDescription("Vide entièrement la file (admin)"),
 
-    new SlashCommandBuilder()
-  .setName("queue_ready")
-  .setDescription("Configure le temps de validation (ready check) en secondes")
+new SlashCommandBuilder()
+  .setName("queue_settings")
+  .setDescription("Configurer la file (ready-check on/off et délai)")
+  .addBooleanOption(o =>
+    o.setName("enabled")
+     .setDescription("Activer le ready-check (true) ou lancer direct (false)")
+     .setRequired(false)
+  )
   .addIntegerOption(o =>
     o.setName("ready_seconds")
-      .setDescription("Entre 10 et 600")
-      .setMinValue(10)
-      .setMaxValue(600)
-      .setRequired(true)
+     .setDescription("Délai du ready-check en secondes (10..600)")
+     .setMinValue(10)
+     .setMaxValue(600)
+     .setRequired(false)
   ),
 
   // Veto config
@@ -151,6 +166,11 @@ new SlashCommandBuilder()
       .setDescription("Mot de passe admin (.env ADMIN_KEY)")
       .setRequired(true)
   ),
+  
+  new SlashCommandBuilder()
+  .setName("admin_roles_keys")
+  .setDescription("Afficher la liste de TOUTES les autorisations possibles (et leur configuration actuelle)"),
+
 
   new SlashCommandBuilder()
     .setName("admin_roles_set")
@@ -166,7 +186,8 @@ new SlashCommandBuilder()
 
   new SlashCommandBuilder()
     .setName("admin_roles_show")
-    .setDescription("Affiche les rôles autorisés par commande (admin)"),
+    .setDescription("Affiche les rôles autorisés par commande (admin)")
+    .addStringOption(o => o.setName("key").setDescription("ex: veto_set_captain").setRequired(false)),
 
 ].map(c => c.toJSON());
 

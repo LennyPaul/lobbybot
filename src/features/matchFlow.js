@@ -12,6 +12,204 @@ import { col, getNextSequence } from "../db/models.js";
 import { refreshQueuePanel } from "./queuePanel.js";
 import { startVeto, buildRecapEmbed, computeCaptains } from "./veto.js";
 import { refreshLeaderboard, upsertMatchHistoryMessage } from "./boards.js";
+import { createMatchVoiceChannels, cleanupMatchVoiceChannels } from "./voiceRooms.js";
+import { requireRole } from "../lib/roles.js"; 
+
+async function updateAdminReviewMessage(client, matchId, winner = null) {
+  const match = await col("matches").findOne(
+    { matchId },
+    { projection: { reviewChannelId: 1, reviewMessageId: 1, teamA: 1, teamB: 1, pickedMap: 1, capVotes: 1, status: 1 } }
+  );
+  if (!match?.reviewChannelId || !match?.reviewMessageId) return;
+
+  // Embeds "final" si winner connu
+  const decided = winner ?? match.winner ?? null;
+  const color = decided ? (decided === "A" ? 0x2ECC71 : 0xE74C3C) : 0xF39C12;
+
+  const voteTxtA = match.capVotes?.A ? `Équipe ${match.capVotes.A} ✅` : "—";
+  const voteTxtB = match.capVotes?.B ? `Équipe ${match.capVotes.B} ✅` : "—";
+
+  const embed = new EmbedBuilder()
+    .setTitle(`Match #${matchId} — ${decided ? `Décision: Équipe ${decided}` : "En review"}`)
+    .setDescription(
+      decided
+        ? `La décision a été **validée** par un admin.\nVictoire: **Équipe ${decided}**.`
+        : `Les capitaines ne sont pas d'accord. Un admin doit trancher.`
+    )
+    .addFields(
+      { name: "Carte", value: match.pickedMap ? `\`${match.pickedMap}\`` : "—", inline: false },
+      { name: "Vote Capitaine A", value: voteTxtA, inline: true },
+      { name: "Vote Capitaine B", value: voteTxtB, inline: true },
+    )
+    .setColor(color);
+
+  try {
+    const channel = await client.channels.fetch(match.reviewChannelId);
+    const msg = await channel.messages.fetch(match.reviewMessageId);
+    await msg.edit({
+      embeds: [embed],
+      components: decided
+        ? [] // on désactive les boutons si une décision existe
+        : msg.components,
+    });
+  } catch {}
+}
+
+/** Crée (ou récupère) le salon texte d’escalade admin */
+async function ensureAdminReviewChannel(guild) {
+  if (!guild) return null;
+  let ch = guild.channels.cache.find(
+    c => c.type === ChannelType.GuildText && c.name.toLowerCase() === "match-review"
+  );
+  if (ch) return ch;
+
+  ch = await guild.channels.create({
+    name: "match-review",
+    type: ChannelType.GuildText,
+    permissionOverwrites: [
+      { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+    ],
+  });
+  return ch;
+}
+
+/** Embed d’état du vote capitaine */
+function captainVoteEmbed(match, state) {
+  const voteA = state?.capVotes?.A ?? "—";
+  const voteB = state?.capVotes?.B ?? "—";
+  const txtA = voteA === "A" ? "A ✅" : voteA === "B" ? "B ✅" : "—";
+  const txtB = voteB === "A" ? "A ✅" : voteB === "B" ? "B ✅" : "—";
+
+  return new EmbedBuilder()
+    .setTitle(`Match #${match.matchId} — Vote des capitaines`)
+    .setDescription(
+      (match.pickedMap ? `**Carte :** ${match.pickedMap}\n` : "") +
+      `Seuls les **capitaines** votent.\n` +
+      `• Si les 2 votes **coïncident** → victoire validée\n` +
+      `• Si **désaccord** → envoi en **review admin**`
+    )
+    .addFields(
+      { name: "Vote capitaine A", value: txtA, inline: true },
+      { name: "Vote capitaine B", value: txtB, inline: true },
+    );
+}
+
+/** MAJ du message #3 (bonne game + vote capitaine) */
+async function updateCaptainVoteMessage(client, matchId) {
+  const match = await col("matches").findOne({ matchId });
+  if (!match?.voteMessageId || !match?.threadId) return;
+
+  const fresh = await col("matches").findOne(
+    { matchId },
+    { projection: { capVotes: 1, pickedMap: 1 } }
+  );
+
+  const voteA = fresh?.capVotes?.A ?? "—";
+  const voteB = fresh?.capVotes?.B ?? "—";
+  const txtA = voteA === "A" ? "A ✅" : voteA === "B" ? "B ✅" : "—";
+  const txtB = voteB === "A" ? "A ✅" : voteB === "B" ? "B ✅" : "—";
+
+  const embed = new EmbedBuilder()
+    .setTitle(`Match #${matchId} — Vote des capitaines`)
+    .setDescription(
+      (fresh?.pickedMap ? `**Carte :** ${fresh.pickedMap}\n` : "") +
+      `Seuls les **capitaines** votent.\n` +
+      `• Si les 2 votes **coïncident** → victoire validée\n` +
+      `• Si **désaccord** → envoi en **review admin**`
+    )
+    .addFields(
+      { name: "Vote capitaine A", value: txtA, inline: true },
+      { name: "Vote capitaine B", value: txtB, inline: true },
+    );
+
+  try {
+    const thread = await client.channels.fetch(match.threadId);
+    const msg = await thread.messages.fetch(match.voteMessageId);
+    await msg.edit({
+      embeds: [embed],
+      components: [
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`capvote_A_${matchId}`).setLabel("Équipe A a gagné").setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId(`capvote_B_${matchId}`).setLabel("Équipe B a gagné").setStyle(ButtonStyle.Danger),
+        ),
+      ],
+    });
+  } catch {}
+}
+
+/** Envoi vers #match-review si désaccord capitaine */
+async function escalateToAdminReview(client, matchId) {
+  const match = await col("matches").findOne({ matchId });
+  if (!match) return;
+
+  // guild
+  let guild = null;
+  if (match.guildId) {
+    guild = client.guilds.cache.get(match.guildId) ?? null;
+    if (!guild) { try { guild = await client.guilds.fetch(match.guildId); } catch {} }
+  }
+  if (!guild && match.threadId) {
+    try { const thread = await client.channels.fetch(match.threadId); guild = thread?.guild ?? null; } catch {}
+  }
+  if (!guild) return;
+
+  const review = await ensureAdminReviewChannel(guild);
+  if (!review) return;
+
+  // Récup info utiles
+  const veto = await col("veto").findOne({ matchId }, { projection: { captainA: 1, captainB: 1 } });
+  const capVotes = match.capVotes ?? {};
+  const voteTxtA = capVotes.A ? `Équipe ${capVotes.A} ✅` : "—";
+  const voteTxtB = capVotes.B ? `Équipe ${capVotes.B} ✅` : "—";
+
+  const embed = new EmbedBuilder()
+    .setTitle(`Litige — Match #${matchId}`)
+    .setDescription(
+      `Les **capitaines ne sont pas d’accord** sur le vainqueur.\n` +
+      `Merci à un **admin** de trancher via les boutons ci-dessous.`
+    )
+    .addFields(
+      {
+        name: "Équipe A",
+        value:
+          (match.teamA || []).map(id => `${id === veto?.captainA ? "👑" : "•"} <@${id}>`).join("\n") || "—",
+        inline: true
+      },
+      {
+        name: "Équipe B",
+        value:
+          (match.teamB || []).map(id => `${id === veto?.captainB ? "👑" : "•"} <@${id}>`).join("\n") || "—",
+        inline: true
+      },
+      { name: "Carte", value: match.pickedMap ? `\`${match.pickedMap}\`` : "—", inline: false },
+      { name: "Vote Capitaine A", value: voteTxtA, inline: true },
+      { name: "Vote Capitaine B", value: voteTxtB, inline: true },
+    )
+    .setColor(0xF39C12) // orange "en review"
+    .setFooter({ text: "Seuls les rôles autorisés peuvent valider." });
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`admin_setwin_A_${matchId}`).setLabel(`Valider Équipe A`).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`admin_setwin_B_${matchId}`).setLabel(`Valider Équipe B`).setStyle(ButtonStyle.Danger),
+  );
+
+  const sent = await review.send({ embeds: [embed], components: [row] });
+
+  // ⚠️ ne stocke QUE des IDs
+  await col("matches").updateOne(
+    { matchId },
+    { $set: { reviewChannelId: sent.channel.id, reviewMessageId: sent.id, status: "review", updatedAt: new Date() } }
+  );
+
+  // info dans le thread
+  try {
+    if (match.threadId) {
+      const thread = await client.channels.fetch(match.threadId);
+      await thread.send("⚠️ Désaccord des capitaines → **review admin** ouverte dans `#match-review`.");
+    }
+  } catch {}
+}
+
 
 /** ===== Algorithmes ===== **/
 function balanceTeams(players) {
@@ -107,6 +305,43 @@ export async function tryStartMatch(client) {
   // retirer de la file
   await col("queue").deleteMany({ userId: { $in: allIds } });
 
+  // On récupère la guild depuis le thread ou le channel parent
+  const guild =
+  thread?.guild ??
+  channel?.guild ??
+  interaction?.guild ??
+  (client.guilds && client.guilds.cache.size === 1
+    ? client.guilds.cache.first()
+    : null);
+
+try {
+  if (!guild) throw new Error("Guild introuvable pour créer les salons vocaux");
+
+  const voiceInfo = await createMatchVoiceChannels(
+    guild,
+    matchId,        // ⬅️ on utilise matchId, pas match.matchId
+    teamAIds,
+    teamBIds
+  );
+
+  await col("matches").updateOne(
+    { matchId },   // ⬅️ idem : filtre par matchId
+    { $set: { ...voiceInfo, updatedAt: new Date() } }
+  );
+
+  // Après la création du thread :
+const guildId = thread?.guild?.id ?? null;
+if (guildId) {
+  await col("matches").updateOne(
+    { matchId },
+    { $set: { guildId } }
+  );
+}
+
+} catch (e) {
+  console.warn(`[match ${matchId}] Impossible de créer les salons vocaux :`, e.message);
+}
+
   // 1) recap
   const { captainA, captainB } = await computeCaptains(teamAIds, teamBIds);
   const recap = buildRecapEmbed(matchId, teamAIds, teamBIds, captainA, captainB);
@@ -124,61 +359,80 @@ export async function tryStartMatch(client) {
 /** ===== Votes ===== **/
 export async function handleVoteButton(interaction, client) {
   const id = interaction.customId;
-  if (!id.startsWith("vote_")) return false;
 
-  const [, team, matchIdStr] = id.split("_");
-  const matchId = parseInt(matchIdStr, 10);
-  const userId = interaction.user.id;
+  // ===== VOTE CAPITAINE =====
+  if (id.startsWith("capvote_")) {
+    // capvote_A_12  /  capvote_B_12
+    const [, pick, midStr] = id.split("_");
+    const matchId = parseInt(midStr, 10);
+    const userId = interaction.user.id;
 
-  const match = await col("matches").findOne({ matchId, status: "voting" });
-  if (!match) {
-    return interaction.reply({ content: "Ce vote n’est pas (ou plus) actif.", ephemeral: true });
+    await interaction.deferUpdate().catch(() => {});
+
+    // on s’appuie sur le doc veto pour connaître les capitaines
+    const veto = await col("veto").findOne({ matchId });
+    if (!veto) {
+      return interaction.reply({ content: "Match introuvable pour ce vote.", ephemeral: true });
+    }
+
+    let side = null;
+    if (userId === veto.captainA) side = "A";
+    if (userId === veto.captainB) side = "B";
+    if (!side) {
+      return interaction.reply({ content: "Seuls les **capitaines** peuvent voter.", ephemeral: true });
+    }
+
+    await col("matches").updateOne(
+      { matchId },
+      { $set: { [`capVotes.${side}`]: pick, updatedAt: new Date() } }
+    );
+
+    await updateCaptainVoteMessage(client, matchId).catch(() => {});
+    await interaction.deferUpdate().catch(() => {});
+    const m = await col("matches").findOne({ matchId }, { projection: { capVotes: 1 } });
+    const vA = m?.capVotes?.A ?? null;
+    const vB = m?.capVotes?.B ?? null;
+    if (vA && vB) {
+      if (vA === vB) {
+        // ✅ Accord → finalise avec ta fonction existante
+        // ⚠️ adapte l’appel si ta signature diffère (ex: finalizeMatch(client, matchId, vA))
+        await finalizeMatch( matchId, vA, client);
+      } else {
+        // ❌ Désaccord → escalade admin
+        await escalateToAdminReview(client, matchId);
+      }
+    }
+    return;
   }
 
-  const mp = await col("match_players").findOne({ matchId, userId });
-  if (!mp) {
-    return interaction.reply({ content: "Tu ne fais pas partie de ce match.", ephemeral: true });
-  }
+  // ===== DÉCISION ADMIN DANS #match-review =====
+  if (id.startsWith("admin_setwin_")) {
+    // admin_setwin_A_12
+    const [, , pick, midStr] = id.split("_");
+    const matchId = parseInt(midStr, 10);
 
-  await col("votes").updateOne(
-    { matchId, userId },
-    { $set: { matchId, userId, choice: team === "A" ? "A" : "B", createdAt: new Date() } },
-    { upsert: true }
-  );
+    // Protection via rôles (configurable avec /admin_roles_set key: admin_review_pick)
+    const ok = await requireRole(interaction, "admin_review_pick");
+    if (!ok) return; // message d’erreur déjà envoyé
 
-  await interaction.deferUpdate().catch(() => {});
+    await interaction.deferUpdate().catch(() => {});
+    await finalizeMatch( matchId, pick, client);
+    await updateAdminReviewMessage(client, matchId, pick).catch(() => {});
 
-  // MAJ du message de vote (compteurs)
-  const votes = await col("votes").aggregate([
-    { $match: { matchId } },
-    { $group: { _id: "$choice", n: { $sum: 1 } } }
-  ]).toArray();
-  const countA = votes.find(v => v._id === "A")?.n ?? 0;
-  const countB = votes.find(v => v._id === "B")?.n ?? 0;
-  const total = countA + countB;
-
-  if (match.votesMessageId && match.threadId) {
+    // (optionnel) : édite le message de review pour figer la décision
     try {
-      const thread = await client.channels.fetch(match.threadId);
-      const msg = await thread.messages.fetch(match.votesMessageId);
-      await msg.edit({
-        content:
-          `**Bonne game à tous !** 🎮\n` +
-          `À la fin du match, merci de **voter** pour l’équipe gagnante ci-dessous.\n` +
-          `> Majorité requise : **6/10** votes pour la même équipe.\n` +
-          `> Elo mis à jour automatiquement.\n\n` +
-          `**Votes** — Total: **${total}/10** | A: **${countA}** | B: **${countB}**`,
-      });
+      const match = await col("matches").findOne({ matchId });
+      if (match?.reviewMessageId && interaction.channelId) {
+        const msg = await interaction.channel.messages.fetch(match.reviewMessageId).catch(() => null);
+        if (msg) await msg.edit({ content: `Décision admin: **Équipe ${pick}** validée (match #${matchId}).`, components: [] });
+      }
     } catch {}
+    return;
   }
 
-  if (total >= 6 && (countA >= 6 || countB >= 6)) {
-    const winner = countA > countB ? "A" : "B";
-    await finalizeMatch(matchId, winner, client);
-  }
-
-  return true;
+  // Anciennes IDs "vote_" → on ignore (ou renvoie un msg éphémère si tu préfères)
 }
+
 
 /** ===== Finalisation Elo + annonces + MAJ boards ===== **/
 export async function finalizeMatch(matchId, winner, client) {
@@ -242,6 +496,8 @@ export async function finalizeMatch(matchId, winner, client) {
 
   await col("matches").updateOne({ matchId }, { $set: { status: "closed", closedAt: new Date(), winner } });
 
+  try { await cleanupMatchAssets(client, matchId); } catch {}
+
   // annonce dans le thread + archive
   try {
     if (match.threadId) {
@@ -268,5 +524,30 @@ export async function finalizeMatch(matchId, winner, client) {
     }
   } catch {}
 }
+
+export async function cleanupMatchAssets(client, matchId) {
+  const match = await col("matches").findOne({ matchId });
+  if (!match) return;
+
+  // Récupère la guild via guildId sinon via le thread
+  let guild = null;
+  if (match.guildId) {
+    guild = client.guilds.cache.get(match.guildId) ?? null;
+    if (!guild) {
+      try { guild = await client.guilds.fetch(match.guildId); } catch {}
+    }
+  }
+  if (!guild && match.threadId) {
+    try {
+      const thread = await client.channels.fetch(match.threadId);
+      guild = thread?.guild ?? null;
+    } catch {}
+  }
+
+  try {
+    await cleanupMatchVoiceChannels(guild, match);
+  } catch {}
+}
+
 
 export { refreshLeaderboard, upsertMatchHistoryMessage };

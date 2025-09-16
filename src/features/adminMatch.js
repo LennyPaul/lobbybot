@@ -4,6 +4,8 @@ import { finalizeMatch } from "./matchFlow.js";
 import { refreshLeaderboard, upsertMatchHistoryMessage } from "./boards.js";
 import { ChannelType, PermissionFlagsBits } from "discord.js";
 import { requireRole } from "../lib/roles.js";
+import { cleanupMatchAssets } from "./matchFlow.js";
+
 
 // Helper local : trouver/créer #logs-bot
 async function getLogsChannel(guild) {
@@ -86,6 +88,8 @@ export async function handleMatchCancel(interaction, client) {
     let guildId = null;
     try { guildId = (await client.channels.fetch(match.threadId))?.guildId; } catch {}
     if (guildId) await upsertMatchHistoryMessage(client, guildId, matchId);
+
+    try { await cleanupMatchAssets(client, matchId); } catch {}
 
     try {
       const logs = await getLogsChannel(interaction.guild);
