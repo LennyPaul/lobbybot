@@ -118,6 +118,7 @@ function statusLabel(m) {
   if (m.status === "closed") return "Terminé";
   if (m.status === "reversed") return "Annulé";
   if (m.status === "abandoned") return "Abandonné";
+  if (m.status === "review") return "Review Admin";
   return m.status || "Inconnu";
 }
 

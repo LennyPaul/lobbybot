@@ -227,7 +227,6 @@ async function updateVetoMessage(client, matchId) {
         { $set: { vetoMessageId: sent.id, updatedAt: new Date() } }
       );
     } catch (e2) {
-      console.warn("[veto] impossible de mettre à jour le message:", e2.message);
     }
   }
 }

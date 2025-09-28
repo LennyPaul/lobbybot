@@ -1,5 +1,7 @@
 import "dotenv/config";
 import { REST, Routes, SlashCommandBuilder } from "discord.js";
+import { ChannelType } from "discord.js";
+
 
 const commands = [
   // File d'attente / setup
@@ -188,6 +190,44 @@ new SlashCommandBuilder()
     .setName("admin_roles_show")
     .setDescription("Affiche les rôles autorisés par commande (admin)")
     .addStringOption(o => o.setName("key").setDescription("ex: veto_set_captain").setRequired(false)),
+
+  // /setup_onboarding
+  new SlashCommandBuilder()
+    .setName("setup_onboarding")
+    .setDescription("Configurer le message permanent d'inscription (bouton + canaux + rôle)")
+    .addChannelOption(o =>
+      o.setName("channel")
+      .setDescription("Salon où poster le message d'inscription")
+      .addChannelTypes(ChannelType.GuildText)
+      .setRequired(true)
+    )
+    .addChannelOption(o =>
+      o.setName("admin_channel")
+      .setDescription("Salon où seront envoyées les demandes d'inscription")
+      .addChannelTypes(ChannelType.GuildText)
+      .setRequired(true)
+    )
+    .addRoleOption(o =>
+      o.setName("role")
+      .setDescription("Rôle attribué aux utilisateurs acceptés")
+      .setRequired(true)
+    ),
+
+  // /onb_set_questions
+  new SlashCommandBuilder()
+    .setName("onb_set_questions")
+    .setDescription("Configurer les questions de l'inscription (séparées par |)")
+    .addStringOption(o =>
+      o.setName("questions")
+      .setDescription("Ex: Ton pseudo ? | Ton rang ? | Tes attentes ? (max 5 questions)")
+      .setRequired(true)
+    ),
+
+    // /onb_show_questions
+  new SlashCommandBuilder()
+    .setName("onb_show_questions")
+    .setDescription("Voir les questions actuelles de l'inscription"),
+
 
 ].map(c => c.toJSON());
 

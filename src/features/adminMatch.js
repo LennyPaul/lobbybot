@@ -1,6 +1,6 @@
 // src/features/adminMatch.js
 import { col } from "../db/models.js";
-import { finalizeMatch } from "./matchFlow.js";
+import { finalizeMatch, disableMatchComponents } from "./matchFlow.js";
 import { refreshLeaderboard, upsertMatchHistoryMessage } from "./boards.js";
 import { ChannelType, PermissionFlagsBits } from "discord.js";
 import { requireRole } from "../lib/roles.js";
@@ -68,16 +68,51 @@ export async function handleMatchCancel(interaction, client) {
   if (!(await requireRole(interaction, "match_cancel"))) return;
 
   const matchId = interaction.options.getInteger("match_id", true);
+
+  // --- Garde simple avant tout defer/reply long ---
+  const match = await col("matches").findOne({ matchId });
+  if (!match) {
+    return interaction.reply({ content: `Match #${matchId} introuvable.`, ephemeral: true });
+  }
+  if (match.status === "closed") {
+    return interaction.reply({ content: `Match #${matchId} est déjà terminé.`, ephemeral: true });
+  }
+  if (match.status === "abandoned") {
+    return interaction.reply({ content: `Match #${matchId} est déjà abandonné.`, ephemeral: true });
+  }
+
+  // 🔒 Bloque l'annulation si le veto est en cours (il reste >1 map et un tour actif)
+  const veto = await col("veto").findOne(
+    { matchId },
+    { projection: { currentTeam: 1, remaining: 1 } }
+  );
+  if (veto && veto.currentTeam && Array.isArray(veto.remaining) && veto.remaining.length > 1) {
+    return interaction.reply({
+      content: `⛔ Impossible d’annuler le match #${matchId} tant que le **veto** est en cours. Attendez la fin du ban de cartes.`,
+      ephemeral: true,
+    });
+  }
+
+  // --- À partir d'ici, on exécute: on peut defer ---
   try { await interaction.deferReply({ ephemeral: true }); } catch {}
 
-  const match = await col("matches").findOne({ matchId });
-  if (!match) return interaction.editReply({ content: `Match #${matchId} introuvable.` });
-  if (match.status === "closed") return interaction.editReply({ content: `Match #${matchId} est déjà terminé.` });
-  if (match.status === "abandoned") return interaction.editReply({ content: `Match #${matchId} est déjà abandonné.` });
-
   try {
-    await col("matches").updateOne({ matchId }, { $set: { status: "abandoned", canceledAt: new Date() } });
+    // NB: tu utilises "abandoned" ici (cohérent avec tes autres commandes)
+    await col("matches").updateOne(
+      { matchId },
+      { $set: { status: "abandoned", canceledAt: new Date(), updatedAt: new Date() } }
+    );
 
+    // Désactiver tous les composants du thread (recap/veto/vote)
+    try {
+      const m = await col("matches").findOne(
+        { matchId },
+        { projection: { threadId: 1, recapMessageId: 1, vetoMessageId: 1, voteMessageId: 1 } }
+      );
+      await disableMatchComponents(client, m);
+    } catch {}
+
+    // Archiver le thread si présent
     if (match.threadId) {
       try {
         const thread = await client.channels.fetch(match.threadId);
@@ -85,22 +120,29 @@ export async function handleMatchCancel(interaction, client) {
       } catch {}
     }
 
-    let guildId = null;
-    try { guildId = (await client.channels.fetch(match.threadId))?.guildId; } catch {}
-    if (guildId) await upsertMatchHistoryMessage(client, guildId, matchId);
+    // MAJ match history
+    try {
+      const ch = match.threadId ? await client.channels.fetch(match.threadId) : null;
+      const guildId = ch?.guildId ?? interaction.guildId;
+      if (guildId) await upsertMatchHistoryMessage(client, guildId, matchId);
+    } catch {}
 
+    // Cleanup (vocaux, etc.)
     try { await cleanupMatchAssets(client, matchId); } catch {}
 
+    // Logs-bot
     try {
       const logs = await getLogsChannel(interaction.guild);
       if (logs) await logs.send(`🛑 **/match_cancel** — Match #${matchId} abandonné par <@${interaction.user.id}>.`);
     } catch {}
 
-    try { await interaction.deleteReply(); } catch {}
+    // Réponse finale
+    try { await interaction.editReply({ content: `✅ Match #${matchId} annulé (abandon).` }); } catch {}
   } catch (e) {
     try { await interaction.editReply({ content: `Erreur: ${e.message}` }); } catch {}
   }
 }
+
 
 export async function handleMatchSetWinner(interaction, client) {
   if (!(await requireRole(interaction, "match_set_winner"))) return;

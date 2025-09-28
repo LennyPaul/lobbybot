@@ -53,7 +53,6 @@ async function queueEmbedNormal() {
         ? "Un **ready-check** sera lancé pour les 10 premiers."
         : "La partie se **lance automatiquement** dès qu’il y a **10 joueurs**.")
     )
-    .addFields({ name: "En file (ordre d’arrivée)", value: preview || "—" })
     .setFooter({ text: "Clique sur les boutons pour rejoindre/partir." });
 }
 
@@ -89,7 +88,6 @@ function rcStatusEmbed(rc) {
       `**Temps restant : ${secondsLeft}s**\n` +
       `La partie se crée dès que **10/10** sont confirmés.`
     )
-    .addFields({ name: "Joueurs", value: lines || "—" })
     .setFooter({ text: "Ce message s’actualise automatiquement." });
 }
 
@@ -139,7 +137,7 @@ async function notifyPlayersViaDM(client, rc) {
   const text =
     `Tu as été sélectionné pour un match perso.\n` +
     `Clique sur le bouton ci-dessous pour **valider ta présence**.\n` +
-    `Temps restant : **${secondsLeft}s**.`;
+    `Temps pour valider : **${secondsLeft}s**.`;
 
   for (const userId of rc.userIds) {
     if (userId.startsWith("f_")) continue; // pas de DM pour fakes
@@ -358,7 +356,7 @@ export async function handleQueueButtons(interaction, client) {
         { $match: { userId } },
         { $lookup: { from: "matches", localField: "matchId", foreignField: "matchId", as: "m" } },
         { $unwind: "$m" },
-        { $match: { "m.status": { $nin: ["closed", "reversed", "abandoned"] } } },
+        { $match: { "m.status": { $nin: ["closed", "reversed", "abandoned","review"] } } },
         { $limit: 1 }
       ]).toArray();
       if (active.length) {

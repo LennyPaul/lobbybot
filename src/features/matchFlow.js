@@ -15,6 +15,34 @@ import { refreshLeaderboard, upsertMatchHistoryMessage } from "./boards.js";
 import { createMatchVoiceChannels, cleanupMatchVoiceChannels } from "./voiceRooms.js";
 import { requireRole } from "../lib/roles.js"; 
 
+
+async function disableMessageComponents(channel, messageId) {
+  try {
+    const msg = await channel.messages.fetch(messageId);
+    const embeds = msg.embeds?.length ? msg.embeds : [];
+    await msg.edit({ embeds, components: [] });
+  } catch {}
+}
+
+// Désactive une liste de messages dans le thread du match
+async function disableMatchComponents(client, match) {
+  try {
+    if (!match?.threadId) return;
+    const thread = await client.channels.fetch(match.threadId);
+
+    const ids = [
+      match.recapMessageId,
+      match.vetoMessageId,
+      match.voteMessageId,
+    ].filter(Boolean);
+
+    for (const mid of ids) {
+      await disableMessageComponents(thread, mid);
+    }
+  } catch {}
+}
+
+
 async function updateAdminReviewMessage(client, matchId, winner = null) {
   const match = await col("matches").findOne(
     { matchId },
@@ -141,6 +169,17 @@ async function updateCaptainVoteMessage(client, matchId) {
 async function escalateToAdminReview(client, matchId) {
   const match = await col("matches").findOne({ matchId });
   if (!match) return;
+  console.log('test');
+
+    // 2) Désactiver les anciens boutons de vote dans le thread (si présents)
+  try {
+    if (match.threadId && match.voteMessageId) {
+      const thread = await client.channels.fetch(match.threadId);
+      const msg = await thread.messages.fetch(match.voteMessageId);
+      const embeds = msg.embeds?.length ? msg.embeds : [];
+      await msg.edit({ embeds, components: [] });
+    }
+  } catch {}
 
   // guild
   let guild = null;
@@ -200,6 +239,28 @@ async function escalateToAdminReview(client, matchId) {
     { matchId },
     { $set: { reviewChannelId: sent.channel.id, reviewMessageId: sent.id, status: "review", updatedAt: new Date() } }
   );
+
+  try {
+  const m = await col("matches").findOne(
+    { matchId },
+    { projection: { guildId: 1 } }
+  );
+  if (m?.guildId) {
+    await upsertMatchHistoryMessage(client, m.guildId, matchId);
+  }
+} catch (e) {
+  console.warn("[history] update on dispute failed:", e?.message);
+}
+
+// juste après avoir set status: "litige"
+try {
+  const m = await col("matches").findOne(
+    { matchId },
+    { projection: { threadId: 1, recapMessageId: 1, vetoMessageId: 1, voteMessageId: 1 } }
+  );
+  await disableMatchComponents(client, m);
+} catch {}
+
 
   // info dans le thread
   try {
@@ -523,6 +584,15 @@ export async function finalizeMatch(matchId, winner, client) {
       await upsertMatchHistoryMessage(client, guildId, matchId);
     }
   } catch {}
+
+  try {
+  const m = await col("matches").findOne(
+    { matchId },
+    { projection: { threadId: 1, recapMessageId: 1, vetoMessageId: 1, voteMessageId: 1 } }
+  );
+  await disableMatchComponents(client, m);
+} catch {}
+
 }
 
 export async function cleanupMatchAssets(client, matchId) {
@@ -550,4 +620,4 @@ export async function cleanupMatchAssets(client, matchId) {
 }
 
 
-export { refreshLeaderboard, upsertMatchHistoryMessage };
+export { refreshLeaderboard, upsertMatchHistoryMessage, disableMatchComponents };
