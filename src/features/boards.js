@@ -19,7 +19,7 @@ function chunkArray(arr, size) { const out = []; for (let i=0;i<arr.length;i+=si
 /** ========= LEADERBOARD ========= **/
 export async function refreshLeaderboard(client, guildId) {
   const guild = await client.guilds.fetch(guildId);
-  const ch = await ensureTextChannel(guild, "leaderboard");
+  const ch = await ensureTextChannel(guild, "📊|leaderboard");
 
   const winsAgg = await col("match_players").aggregate([
     { $lookup: { from: "matches", localField: "matchId", foreignField: "matchId", as: "m" } },
@@ -153,7 +153,7 @@ async function buildMatchHistoryEmbed(matchId) {
 
 export async function upsertMatchHistoryMessage(client, guildId, matchId) {
   const guild = await client.guilds.fetch(guildId);
-  const ch = await ensureTextChannel(guild, "match-history");
+  const ch = await ensureTextChannel(guild, "🎮┃match-history");
   const eb = await buildMatchHistoryEmbed(matchId);
   const match = await col("matches").findOne({ matchId });
   if (!match) return;
@@ -176,7 +176,7 @@ export async function upsertMatchHistoryMessage(client, guildId, matchId) {
 
 export async function resetMatchHistoryBoard(client, guildId) {
   const guild = await client.guilds.fetch(guildId);
-  const ch = await ensureTextChannel(guild, "match-history");
+  const ch = await ensureTextChannel(guild, "🎮┃match-history");
   try {
     let lastId = undefined;
     for (let round = 0; round < 10; round++) {
@@ -198,7 +198,7 @@ export async function handleSetupMatchHistory(interaction, client) {
   try { await interaction.deferReply({ ephemeral: true }); deferred = true; } catch {}
   try {
     const guild = await interaction.guild.fetch();
-    await ensureTextChannel(guild, "match-history");
+    await ensureTextChannel(guild, "🎮┃match-history");
     const all = await col("matches").find().project({ matchId: 1 }).sort({ matchId: 1 }).toArray();
     for (const m of all) {
       // eslint-disable-next-line no-await-in-loop
