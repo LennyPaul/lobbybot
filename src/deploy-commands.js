@@ -276,11 +276,16 @@ new SlashCommandBuilder()
 
 new SlashCommandBuilder()
   .setName("rules_panel")
-  .setDescription("Publier un règlement (long) avec un bouton pour donner un rôle")
+  .setDescription("Publier un règlement avec un bouton qui ajoute et/ou retire un rôle")
   .addRoleOption(o =>
-    o.setName("role")
-     .setDescription("Rôle à donner à ceux qui acceptent")
-     .setRequired(true)
+    o.setName("role_add")
+     .setDescription("Rôle à AJOUTER quand on clique")
+     .setRequired(false)
+  )
+  .addRoleOption(o =>
+    o.setName("role_remove")
+     .setDescription("Rôle à RETIRER quand on clique")
+     .setRequired(false)
   )
   .addStringOption(o =>
     o.setName("text")
@@ -307,6 +312,7 @@ new SlashCommandBuilder()
      )
      .setRequired(false)
   ),
+
   new SlashCommandBuilder()
   .setName("say")
   .setDescription("Poster un message avec le bot dans un salon choisi")

@@ -137,7 +137,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton()) {
       const id = interaction.customId;
 
-      if (id.startsWith("accept_role_")) return handleAcceptRoleButton(interaction);
+      if (id.startsWith("accept_role_") || id.startsWith("accept_roles:")) {
+        return handleAcceptRoleButton(interaction);
+      }
 
       if (interaction.customId === "onb_start") return handleOnbStart(interaction);
       if (interaction.customId.startsWith("onb_accept_") || interaction.customId.startsWith("onb_reject_")) {

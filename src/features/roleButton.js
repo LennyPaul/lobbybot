@@ -8,76 +8,101 @@ import {
   PermissionFlagsBits,
 } from "discord.js";
 
-// Split en blocs <= 4000 (limite Embed.description)
+/* =========================
+   Helpers
+   ========================= */
+
+/** Découpe un long texte en morceaux de taille max (pour les embeds). */
 function splitIntoChunks(text, size = 4000) {
   const chunks = [];
-  let i = 0;
-  while (i < text.length) {
-    chunks.push(text.slice(i, i + size));
-    i += size;
-  }
+  for (let i = 0; i < text.length; i += size) chunks.push(text.slice(i, i + size));
   return chunks.length ? chunks : [text];
 }
 
-// Récupère le texte depuis l’option "text" ou un attachment .txt
+/** Récupère le texte depuis l’option "text" ou un attachment .txt */
 async function resolveRulesText(interaction) {
   const txt = interaction.options.getString("text");
   const att = interaction.options.getAttachment("attachment");
-
   if (att) {
-    // On attend un .txt ; Discord héberge le fichier sur CDN, on peut fetch l’URL
-    try {
-      const res = await fetch(att.url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = await res.text();
-      return body;
-    } catch {
-      throw new Error("Impossible de lire le fichier joint (attachment).");
-    }
+    const res = await fetch(att.url);
+    if (!res.ok) throw new Error(`Impossible de lire la pièce jointe (HTTP ${res.status}).`);
+    return (await res.text()).trim();
   }
-
   if (typeof txt === "string" && txt.trim().length) return txt.trim();
-
-  throw new Error("Aucun texte fourni. Donne 'text' ou un attachment .txt.");
+  throw new Error("Aucun texte fourni. Utilise l’option `text` ou joins un fichier `.txt`.");
 }
 
+/** Vérifie si le bot peut gérer (hiérarchiquement) un rôle donné. */
+function canManageRole(meMember, role) {
+  if (!role) return false;
+  const myTop = meMember?.roles?.highest?.position ?? 0;
+  return myTop > role.position;
+}
+
+/* =========================
+   Commande: /rules_panel
+   - Publie le règlement (1..N embeds)
+   - Ajoute un bouton qui:
+       • ajoute role_add (si fourni)
+       • retire role_remove (si fourni)
+   - CustomId: "accept_roles:<addId|0>:<remId|0>"
+   ========================= */
 export async function handleRulesPanelCommand(interaction) {
-  const role = interaction.options.getRole("role", true);
+  const addRole = interaction.options.getRole("role_add");
+  const removeRole = interaction.options.getRole("role_remove");
   const place = interaction.options.getString("button_place") || "first";
   const chosenChannel = interaction.options.getChannel("channel");
   const channel =
-    (chosenChannel && chosenChannel.type === ChannelType.GuildText ? chosenChannel : interaction.channel);
+    (chosenChannel && chosenChannel.type === ChannelType.GuildText)
+      ? chosenChannel
+      : interaction.channel;
 
-  // Permissions bot dans le salon
+  if (!addRole && !removeRole) {
+    return interaction.reply({
+      content: "Tu dois fournir **role_add** et/ou **role_remove**.",
+      ephemeral: true,
+    });
+  }
+
+  // Permissions basiques dans le salon cible
   const me = interaction.guild.members.me;
-  if (!me?.permissionsIn(channel)?.has(PermissionFlagsBits.SendMessages | PermissionFlagsBits.EmbedLinks)) {
-    return interaction.reply({ content: "⛔ Le bot n’a pas la permission d’envoyer des messages/embeds ici.", ephemeral: true });
+  const perms = me?.permissionsIn(channel);
+  if (!perms?.has(PermissionFlagsBits.SendMessages)) {
+    return interaction.reply({ content: "⛔ Le bot ne peut pas envoyer de messages ici.", ephemeral: true });
+  }
+  if (!perms?.has(PermissionFlagsBits.EmbedLinks)) {
+    return interaction.reply({ content: "⛔ Il manque la permission **Intégrer des liens** (Embed Links).", ephemeral: true });
   }
 
+  // Lire/produire le texte
   let fullText;
-  try {
-    fullText = await resolveRulesText(interaction);
-  } catch (e) {
-    return interaction.reply({ content: `❌ ${e.message}`, ephemeral: true });
-  }
+  try { fullText = await resolveRulesText(interaction); }
+  catch (e) { return interaction.reply({ content: `❌ ${e.message}`, ephemeral: true }); }
 
-  // Découpe auto en embeds
   const chunks = splitIntoChunks(fullText, 4000);
   const embeds = chunks.map((c, i) =>
     new EmbedBuilder()
-      .setTitle(i === 0 ? "📜 Règlement du serveur" : `📜 Suite (${i + 1})`)
+      .setTitle(i === 0 ? "📜 Règlement" : `📜 Suite (${i + 1})`)
       .setDescription(c)
   );
 
-  // Bouton rôle
+  // Construire le bouton double action
+  const addId = addRole?.id ?? "0";
+  const remId = removeRole?.id ?? "0";
+
+  let label = "Accepter";
+  if (addRole && removeRole) label = `✅ Ajouter @${addRole.name} • ❌ Retirer @${removeRole.name}`;
+  else if (addRole) label = `✅ Obtenir @${addRole.name}`;
+  else if (removeRole) label = `❌ Retirer @${removeRole.name}`;
+
   const button = new ButtonBuilder()
-    .setCustomId(`accept_role_${role.id}`)
-    .setLabel("✅ Accepter et obtenir le rôle")
-    .setStyle(ButtonStyle.Success);
+    .setCustomId(`accept_roles:${addId}:${remId}`)
+    .setLabel(label)
+    .setStyle(addRole && !removeRole ? ButtonStyle.Success : ButtonStyle.Secondary);
 
   const row = new ActionRowBuilder().addComponents(button);
 
-  // Envoi des messages
+  // Publication (bouton sur le 1er ou le dernier embed selon "place")
   let firstMsg = null;
   let lastMsg = null;
 
@@ -94,51 +119,114 @@ export async function handleRulesPanelCommand(interaction) {
     if (i === embeds.length - 1) lastMsg = sent;
   }
 
-  // Réponse admin éphémère
   const linkMsg = place === "first" ? firstMsg : lastMsg;
   return interaction.reply({
-    content: `✅ Panneau publié ici : ${linkMsg?.url ?? "#"} — Le bouton attribuera le rôle **@${role.name}**.`,
+    content: `✅ Panneau publié ici : ${linkMsg?.url ?? "#"}`,
     ephemeral: true,
   });
 }
 
-// Gestion du clic sur le bouton
+/* =========================
+   Bouton: accept_roles:<addId|0>:<remId|0>
+   Rétro-compat: accept_role_<roleId> (ajout simple)
+   ========================= */
 export async function handleAcceptRoleButton(interaction) {
-  if (!interaction.customId.startsWith("accept_role_")) return false;
-  const roleId = interaction.customId.replace("accept_role_", "");
-  const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-  if (!member) {
-    try { await interaction.reply({ content: "❌ Membre introuvable.", ephemeral: true }); } catch {}
-    return true;
-  }
+  const id = interaction.customId;
 
-  // Vérifier que le bot peut donner le rôle (hiérarchie + permission)
-  const me = interaction.guild.members.me;
-  const canManage =
-    me?.permissions?.has(PermissionFlagsBits.ManageRoles) &&
-    (me.roles.highest?.position ?? 0) > (interaction.guild.roles.cache.get(roleId)?.position ?? 99999);
+  // Nouveau format (double action)
+  if (id.startsWith("accept_roles:")) {
+    const parts = id.split(":");
+    const addId = parts[1] !== "0" ? parts[1] : null;
+    const remId = parts[2] !== "0" ? parts[2] : null;
 
-  if (!canManage) {
+    const guild = interaction.guild;
+    const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!member) {
+      try { await interaction.reply({ content: "❌ Membre introuvable.", ephemeral: true }); } catch {}
+      return true;
+    }
+
+    const me = guild.members.me;
+    if (!me?.permissions?.has(PermissionFlagsBits.ManageRoles)) {
+      try { await interaction.reply({ content: "⛔ Permission **Gérer les rôles** manquante.", ephemeral: true }); } catch {}
+      return true;
+    }
+
+    const roleAdd = addId ? guild.roles.cache.get(addId) : null;
+    const roleRem = remId ? guild.roles.cache.get(remId) : null;
+
+    // Vérifier hiérarchie
+    if (roleAdd && !canManageRole(me, roleAdd)) {
+      try { await interaction.reply({ content: `⛔ Le bot ne peut pas **ajouter** @${roleAdd.name} (hiérarchie).`, ephemeral: true }); } catch {}
+      return true;
+    }
+    if (roleRem && !canManageRole(me, roleRem)) {
+      try { await interaction.reply({ content: `⛔ Le bot ne peut pas **retirer** @${roleRem.name} (hiérarchie).`, ephemeral: true }); } catch {}
+      return true;
+    }
+
+    // Exécuter
+    let added = false;
+    let removed = false;
+
     try {
-      await interaction.reply({
-        content: "⛔ Le bot ne peut pas attribuer ce rôle (vérifie la hiérarchie des rôles et la permission Gérer les rôles).",
-        ephemeral: true
-      });
-    } catch {}
+      if (roleAdd && !member.roles.cache.has(roleAdd.id)) {
+        await member.roles.add(roleAdd.id, "Règlement accepté (add role)");
+        added = true;
+      }
+      if (roleRem && member.roles.cache.has(roleRem.id)) {
+        await member.roles.remove(roleRem.id, "Règlement accepté (remove role)");
+        removed = true;
+      }
+    } catch {
+      try { await interaction.reply({ content: "❌ Opération impossible (permissions/hiérarchie).", ephemeral: true }); } catch {}
+      return true;
+    }
+
+    const partsOut = [];
+    if (roleAdd) partsOut.push(added ? `✅ Ajouté @${roleAdd.name}` : `ℹ️ Tu as déjà @${roleAdd.name}`);
+    if (roleRem) partsOut.push(removed ? `✅ Retiré @${roleRem.name}` : `ℹ️ Tu n'avais pas @${roleRem.name}`);
+    if (!partsOut.length) partsOut.push("Rien à faire.");
+
+    try { await interaction.reply({ content: partsOut.join(" • "), ephemeral: true }); } catch {}
     return true;
   }
 
-  // Ajoute le rôle (toggle non demandé ; on ne fait que donner)
-  if (member.roles.cache.has(roleId)) {
-    try { await interaction.reply({ content: "ℹ️ Tu as déjà ce rôle.", ephemeral: true }); } catch {}
+  // Ancien format (compat): accept_role_<roleId> → ajoute uniquement
+  if (id.startsWith("accept_role_")) {
+    const roleId = id.replace("accept_role_", "");
+    const guild = interaction.guild;
+    const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!member) {
+      try { await interaction.reply({ content: "❌ Membre introuvable.", ephemeral: true }); } catch {}
+      return true;
+    }
+
+    const me = guild.members.me;
+    const role = guild.roles.cache.get(roleId);
+    if (!role) {
+      try { await interaction.reply({ content: "❌ Rôle invalide.", ephemeral: true }); } catch {}
+      return true;
+    }
+
+    if (!me?.permissions?.has(PermissionFlagsBits.ManageRoles) || !canManageRole(me, role)) {
+      try { await interaction.reply({ content: "⛔ Le bot ne peut pas gérer ce rôle (permission/hiérarchie).", ephemeral: true }); } catch {}
+      return true;
+    }
+
+    if (member.roles.cache.has(roleId)) {
+      try { await interaction.reply({ content: "ℹ️ Tu as déjà ce rôle.", ephemeral: true }); } catch {}
+      return true;
+    }
+
+    try {
+      await member.roles.add(roleId, "Règlement accepté (add role - legacy)");
+      await interaction.reply({ content: "✅ Rôle attribué.", ephemeral: true });
+    } catch {
+      try { await interaction.reply({ content: "❌ Impossible d’attribuer le rôle.", ephemeral: true }); } catch {}
+    }
     return true;
   }
 
-  try {
-    await member.roles.add(roleId, "Acceptation du règlement via bouton");
-    await interaction.reply({ content: "✅ Rôle attribué, merci d’avoir accepté le règlement !", ephemeral: true });
-  } catch {
-    try { await interaction.reply({ content: "❌ Impossible d’attribuer le rôle.", ephemeral: true }); } catch {}
-  }
-  return true;
+  return false;
 }
