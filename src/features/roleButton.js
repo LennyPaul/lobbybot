@@ -91,7 +91,7 @@ export async function handleRulesPanelCommand(interaction) {
   const remId = removeRole?.id ?? "0";
 
   let label = "Accepter";
-  if (addRole && removeRole) label = `Accepter le règlement des matchs !`;
+  if (addRole && removeRole) label = `Accepter le règlement des matchs`;
   else if (addRole) label = `✅ Obtenir @${addRole.name}`;
   else if (removeRole) label = `❌ Retirer @${removeRole.name}`;
 
@@ -183,11 +183,19 @@ export async function handleAcceptRoleButton(interaction) {
       return true;
     }
 
-    const partsOut = [];
-    if (roleAdd && roleRem) partsOut.push(added && removed ? `Règlement accepté` : `Problème de role`);
-    if (!partsOut.length) partsOut.push("Rien à faire.");
+    const partsOut = "";
+    if (roleAdd && roleRem){
+        if(added && removed){
+            partsOut = "Règlement validé"
+        }else{
+            partsOut = 'Problement de role'
+        }
+    }
+    if (!partsOut.length){
+        partsOut = 'Rien à faire.'
+    } 
 
-    try { await interaction.reply({ content: partsOut, ephemeral: true }); } catch {}
+    try { await interaction.reply({ content: partsOut , ephemeral: true }); } catch {}
     return true;
   }
 
