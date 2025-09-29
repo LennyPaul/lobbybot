@@ -19,6 +19,7 @@ import {
 
 // Admin simulateurs file
 import { handleFill, handleClearQueue } from "./features/adminSim.js";
+import { handleSetupCancelLog, handleCancelAdjust } from "./features/cancelLog.js";
 
 // Admin force / matchs
 import { handleForceWin } from "./features/adminForce.js";
@@ -42,13 +43,17 @@ import { handleWipePlayers } from "./features/adminWipe.js";
 
 //Gestion demandes
 import {
-  handleSetupOnboarding,
+  handleOnbPanel,
+  handleOnbSettings,
   handleOnbStart,
-  handleOnbModal,
-  handleOnbDecision,
-  handleOnbSetQuestions,
-  handleOnbShowQuestions
+  handleOnbRulesButton,
+  handleOnbModalSubmit,
+  handleOnbAdminButtons,
 } from "./features/onboarding.js";
+
+import { handleRulesPanelCommand, handleAcceptRoleButton } from "./features/roleButton.js";
+
+import { handleSay } from "./features/announce.js";
 
 
 
@@ -83,11 +88,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isChatInputCommand()) {
       const name = interaction.commandName;
 
+      if (name === "rules_panel") return handleRulesPanelCommand(interaction);
+      if (name === "say") return handleSay(interaction);
 
       //Onboarding
-      if (name === "setup_onboarding") return handleSetupOnboarding(interaction, client);
-      if (name === "onb_set_questions") return handleOnbSetQuestions(interaction);
-      if (name === "onb_show_questions") return handleOnbShowQuestions(interaction);
+      if (name === "onboarding_panel")   return handleOnbPanel(interaction);
+      if (name === "onboarding_settings") return handleOnbSettings(interaction);
 
       // Setup & file
       if (name === "setup") return handleSetup(interaction);
@@ -120,16 +126,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // Wipe players (mdp)
       if (name === "wipe_players") return handleWipePlayers(interaction, client);
 
+      // Log afk
+      if (name === "setup_cancel_log") return handleSetupCancelLog(interaction);
+      if (name === "cancel_adjust") return handleCancelAdjust(interaction);
+
+
       return;
     }
 
     if (interaction.isButton()) {
       const id = interaction.customId;
 
+      if (id.startsWith("accept_role_")) return handleAcceptRoleButton(interaction);
+
       if (interaction.customId === "onb_start") return handleOnbStart(interaction);
       if (interaction.customId.startsWith("onb_accept_") || interaction.customId.startsWith("onb_reject_")) {
         return handleOnbDecision(interaction);
       }
+
+      if (id.startsWith("onb_start:"))        return handleOnbStart(interaction);
+      if (id.startsWith("onb_rules_"))        return handleOnbRulesButton(interaction);
+      if (id.startsWith("onb_admin_"))        return handleOnbAdminButtons(interaction);
 
       // ✅ Route aussi les boutons "rc_*" (ready-check) vers le handler de la file
       if (id.startsWith("queue_") || id.startsWith("rc_")) {
@@ -148,8 +165,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isModalSubmit()) {
-      if (interaction.customId === "onb_modal") return handleOnbModal(interaction, client);
+       if (interaction.customId.startsWith("onb_modal:")) return handleOnbModalSubmit(interaction);
     }
+    
 
   } catch (e) {
     console.error("[Interaction ERR]:", e);

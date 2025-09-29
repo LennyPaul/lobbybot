@@ -291,7 +291,7 @@ function expectedScore(avgA, avgB) {
   return 1 / (1 + Math.pow(10, (avgB - avgA) / 400));
 }
 
-function computeDeltas(avgA, avgB, winner, K = 24) {
+function computeDeltas(avgA, avgB, winner, K = 10) {
   const EA = expectedScore(avgA, avgB);
   const EB = 1 - EA;
   let SA, SB;
@@ -319,7 +319,7 @@ export async function tryStartMatch(client) {
     { $sort: { joinedAt: 1 } },
     { $limit: 10 },
     { $lookup: { from: "players", localField: "userId", foreignField: "userId", as: "player" } },
-    { $addFields: { rating: { $ifNull: [{ $arrayElemAt: ["$player.rating", 0] }, 1000] } } },
+    { $addFields: { rating: { $ifNull: [{ $arrayElemAt: ["$player.rating", 0] }, 100] } } },
     { $project: { userId: 1, rating: 1 } }
   ]).toArray();
 
@@ -503,7 +503,7 @@ export async function finalizeMatch(matchId, winner, client) {
   const players = await col("match_players").aggregate([
     { $match: { matchId } },
     { $lookup: { from: "players", localField: "userId", foreignField: "userId", as: "p" } },
-    { $addFields: { rating: { $ifNull: [{ $arrayElemAt: ["$p.rating", 0] }, 1000] } } },
+    { $addFields: { rating: { $ifNull: [{ $arrayElemAt: ["$p.rating", 0] }, 100] } } },
     { $project: { userId: 1, team: 1, rating: 1 } }
   ]).toArray();
 
@@ -512,7 +512,7 @@ export async function finalizeMatch(matchId, winner, client) {
   const avgA = Math.round(teamA.reduce((s, p) => s + p.rating, 0) / teamA.length);
   const avgB = Math.round(teamB.reduce((s, p) => s + p.rating, 0) / teamB.length);
 
-  const { deltaA, deltaB } = computeDeltas(avgA, avgB, winner, 24);
+  const { deltaA, deltaB } = computeDeltas(avgA, avgB, winner, 10);
 
   // ensure
   const bulkEnsure = col("players").initializeUnorderedBulkOp();
@@ -520,7 +520,7 @@ export async function finalizeMatch(matchId, winner, client) {
     bulkEnsure.find({ userId: p.userId }).upsert().updateOne({
       $setOnInsert: {
         userId: p.userId,
-        rating: 1000,
+        rating: 100,
         gamesPlayed: 0,
         banned: false,
         createdAt: new Date(),
@@ -536,7 +536,7 @@ export async function finalizeMatch(matchId, winner, client) {
   for (const p of players) {
     const delta = (p.team === "A") ? deltaA : deltaB;
     const current = await col("players").findOne({ userId: p.userId }, { projection: { rating: 1 } });
-    const oldRating = current?.rating ?? 1000;
+    const oldRating = current?.rating ?? 100;
 
     bulkApply.find({ userId: p.userId }).updateOne({
       $inc: { rating: delta, gamesPlayed: 1 },

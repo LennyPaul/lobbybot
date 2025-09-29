@@ -180,7 +180,7 @@ async function pickCaptainHighest(teamIds) {
     .project({ userId: 1, rating: 1 })
     .toArray();
   if (!players.length) return pickCaptainRandom(teamIds);
-  players.sort((a, b) => (b?.rating ?? 1000) - (a?.rating ?? 1000));
+  players.sort((a, b) => (b?.rating ?? 100) - (a?.rating ?? 100));
   return players[0].userId;
 }
 

@@ -67,7 +67,7 @@ export async function handleFill(interaction, client) {
       {
         $setOnInsert: {
           userId,
-          rating: 1000,
+          rating: 100,
           gamesPlayed: 0,
           banned: false,
           fake: false,
@@ -108,7 +108,7 @@ export async function handleFill(interaction, client) {
         {
           $setOnInsert: {
             userId: fakeId,
-            rating: 1000,
+            rating: 100,
             gamesPlayed: 0,
             banned: false,
             fake: true,

@@ -40,6 +40,18 @@ export async function handleForceWin(interaction, client) {
     return interaction.reply({ content: `Match #${matchId} déjà clôturé (vainqueur: ${match.winner ?? "?"}).`, ephemeral: true });
   }
 
+    // 🔒 Bloque l'annulation si le veto est en cours (il reste >1 map et un tour actif)
+  const veto = await col("veto").findOne(
+    { matchId },
+    { projection: { currentTeam: 1, remaining: 1 } }
+  );
+  if (veto && veto.currentTeam && Array.isArray(veto.remaining) && veto.remaining.length > 1) {
+    return interaction.reply({
+      content: `⛔ Impossible d’annuler le match #${matchId} tant que le **veto** est en cours. Attendez la fin du ban de cartes.`,
+      ephemeral: true,
+    });
+  }
+
   // On ne montre rien à l’admin en succès : on log simplement
   try { await interaction.deferReply({ ephemeral: true }); } catch {}
 

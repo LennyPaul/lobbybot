@@ -1,4 +1,6 @@
 // src/features/queuePanel.js
+import 'dotenv/config';
+
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -8,6 +10,8 @@ import {
 } from "discord.js";
 import { col } from "../db/models.js";
 import { tryStartMatch } from "./matchFlow.js";
+import { logReadyCancels } from "./cancelLog.js";
+
 
 /** ==================== CONFIG ==================== **/
 const DEFAULT_READY_SECONDS = 60;
@@ -211,7 +215,10 @@ async function expireReadyCheck(client, rcId) {
   const unconfirmed = rc.userIds.filter(u => !confirmedSet.has(u));
 
   if (unconfirmed.length) {
+
+    try { await logReadyCancels(client, process.env.GUILD_ID, unconfirmed, { rcId }); } catch {}
     await col("queue").deleteMany({ userId: { $in: unconfirmed } });
+
   }
 
   await col("ready_checks").updateOne(
@@ -374,7 +381,7 @@ export async function handleQueueButtons(interaction, client) {
 
       await col("players").updateOne(
         { userId },
-        { $setOnInsert: { userId, rating: 1000, gamesPlayed: 0, banned: false, createdAt: new Date() }, $set: { updatedAt: new Date() } },
+        { $setOnInsert: { userId, rating: 100, gamesPlayed: 0, banned: false, createdAt: new Date() }, $set: { updatedAt: new Date() } },
         { upsert: true }
       );
       await col("queue").insertOne({ userId, joinedAt: new Date() });

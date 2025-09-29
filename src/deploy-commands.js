@@ -191,42 +191,185 @@ new SlashCommandBuilder()
     .setDescription("Affiche les rôles autorisés par commande (admin)")
     .addStringOption(o => o.setName("key").setDescription("ex: veto_set_captain").setRequired(false)),
 
-  // /setup_onboarding
-  new SlashCommandBuilder()
-    .setName("setup_onboarding")
-    .setDescription("Configurer le message permanent d'inscription (bouton + canaux + rôle)")
-    .addChannelOption(o =>
-      o.setName("channel")
-      .setDescription("Salon où poster le message d'inscription")
-      .addChannelTypes(ChannelType.GuildText)
-      .setRequired(true)
-    )
-    .addChannelOption(o =>
-      o.setName("admin_channel")
-      .setDescription("Salon où seront envoyées les demandes d'inscription")
-      .addChannelTypes(ChannelType.GuildText)
-      .setRequired(true)
-    )
-    .addRoleOption(o =>
-      o.setName("role")
-      .setDescription("Rôle attribué aux utilisateurs acceptés")
-      .setRequired(true)
-    ),
+// /onboarding_panel
+new SlashCommandBuilder()
+  .setName("onboarding_panel")
+  .setDescription("Créer le panneau d’inscription (bouton Commencer l'inscription)")
+  .addChannelOption(o =>
+    o.setName("channel")
+     .setDescription("Salon texte pour afficher le panneau")
+     .addChannelTypes(ChannelType.GuildText)
+     .setRequired(true)
+  ),
 
-  // /onb_set_questions
-  new SlashCommandBuilder()
-    .setName("onb_set_questions")
-    .setDescription("Configurer les questions de l'inscription (séparées par |)")
-    .addStringOption(o =>
-      o.setName("questions")
-      .setDescription("Ex: Ton pseudo ? | Ton rang ? | Tes attentes ? (max 5 questions)")
-      .setRequired(true)
-    ),
+// /onboarding_settings (ajout de l'option rules)
+new SlashCommandBuilder()
+  .setName("onboarding_settings")
+  .setDescription("Configurer l’inscription (questions, rôle, salon review, timeout, règlement)")
+  .addRoleOption(o =>
+    o.setName("role")
+     .setDescription("Rôle à attribuer à l’acceptation")
+     .setRequired(false)
+  )
+  .addChannelOption(o =>
+    o.setName("review_channel")
+     .setDescription("Salon où les admins reçoivent les demandes")
+     .addChannelTypes(ChannelType.GuildText)
+     .setRequired(false)
+  )
+  .addIntegerOption(o =>
+    o.setName("timeout")
+     .setDescription("Temps max (secondes, 60-3600)")
+     .setMinValue(60).setMaxValue(3600)
+     .setRequired(false)
+  )
+  .addStringOption(o =>
+    o.setName("questions")
+     .setDescription("Questions séparées par | (max 5)")
+     .setRequired(false)
+  )
+  .addStringOption(o =>
+    o.setName("rules")
+     .setDescription("Texte du règlement (affiché avant la modal)")
+     .setRequired(false)
+  ),
+
 
     // /onb_show_questions
   new SlashCommandBuilder()
     .setName("onb_show_questions")
     .setDescription("Voir les questions actuelles de l'inscription"),
+
+  // /setup_cancel_log
+new SlashCommandBuilder()
+  .setName("setup_cancel_log")
+  .setDescription("Configurer le salon de log des joueurs n'ayant pas accepté le ready-check")
+  .addChannelOption(o =>
+    o.setName("channel")
+     .setDescription("Salon texte pour les logs")
+     .addChannelTypes(ChannelType.GuildText)
+     .setRequired(true)
+  ),
+// /cancel_adjust
+new SlashCommandBuilder()
+  .setName("cancel_adjust")
+  .setDescription("Ajuster le compteur de non-validation de ready-check d'un joueur")
+  .addUserOption(o =>
+    o.setName("user")
+     .setDescription("Joueur à modifier")
+     .setRequired(true)
+  )
+  .addIntegerOption(o =>
+    o.setName("amount")
+     .setDescription("Valeur (si mode=add, peut être négative)")
+     .setRequired(true)
+  )
+  .addStringOption(o =>
+    o.setName("mode")
+     .setDescription("add = ajout (par défaut), set = valeur exacte")
+     .addChoices(
+       { name: "add", value: "add" },
+       { name: "set", value: "set" },
+     )
+     .setRequired(false)
+  ),
+
+new SlashCommandBuilder()
+  .setName("rules_panel")
+  .setDescription("Publier un règlement (long) avec un bouton pour donner un rôle")
+  .addRoleOption(o =>
+    o.setName("role")
+     .setDescription("Rôle à donner à ceux qui acceptent")
+     .setRequired(true)
+  )
+  .addStringOption(o =>
+    o.setName("text")
+     .setDescription("Texte du règlement (le bot le découpe automatiquement)")
+     .setRequired(false)
+  )
+  .addAttachmentOption(o =>
+    o.setName("attachment")
+     .setDescription("Fichier .txt contenant le règlement (optionnel)")
+     .setRequired(false)
+  )
+  .addChannelOption(o =>
+    o.setName("channel")
+     .setDescription("Salon où poster (défaut: salon courant)")
+     .addChannelTypes(ChannelType.GuildText)
+     .setRequired(false)
+  )
+  .addStringOption(o =>
+    o.setName("button_place")
+     .setDescription("Où placer le bouton")
+     .addChoices(
+       { name: "Sur le premier message", value: "first" },
+       { name: "Sur le dernier message", value: "last" }
+     )
+     .setRequired(false)
+  ),
+  new SlashCommandBuilder()
+  .setName("say")
+  .setDescription("Poster un message avec le bot dans un salon choisi")
+  .addChannelOption(o =>
+    o.setName("channel")
+     .setDescription("Salon cible (défaut: salon courant)")
+     .addChannelTypes(ChannelType.GuildText)
+     .setRequired(false)
+  )
+  .addStringOption(o =>
+    o.setName("text")
+     .setDescription("Texte à envoyer (auto-découpé si trop long)")
+     .setRequired(false)
+  )
+  .addAttachmentOption(o =>
+    o.setName("attachment")
+     .setDescription("Fichier .txt dont le contenu sera posté")
+     .setRequired(false)
+  )
+  .addBooleanOption(o =>
+    o.setName("embed")
+     .setDescription("Envoyer en embed (auto-découpe > 4000)")
+     .setRequired(false)
+  )
+  .addStringOption(o =>
+    o.setName("mentions")
+     .setDescription("Politique de mentions")
+     .addChoices(
+       { name: "aucune mention", value: "none" },
+       { name: "@users et @roles", value: "some" },
+       { name: "@everyone / @here", value: "everyone" }
+     )
+     .setRequired(false)
+  )
+  .addAttachmentOption(o =>
+    o.setName("file1")
+     .setDescription("Fichier à joindre (image, pdf, etc.)")
+     .setRequired(false)
+  )
+  .addAttachmentOption(o =>
+    o.setName("file2")
+     .setDescription("Fichier à joindre")
+     .setRequired(false)
+  )
+  .addAttachmentOption(o =>
+    o.setName("file3")
+     .setDescription("Fichier à joindre")
+     .setRequired(false)
+  )
+  .addAttachmentOption(o =>
+    o.setName("file4")
+     .setDescription("Fichier à joindre")
+     .setRequired(false)
+  )
+  .addAttachmentOption(o =>
+    o.setName("file5")
+     .setDescription("Fichier à joindre")
+     .setRequired(false)
+  ),
+
+
+
+
 
 
 ].map(c => c.toJSON());

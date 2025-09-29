@@ -36,7 +36,7 @@ export async function refreshLeaderboard(client, guildId) {
     const games = s?.games ?? 0;
     const wins = s?.wins ?? 0;
     const wr = games > 0 ? Math.round((wins / games) * 100) : 0;
-    return { userId: p.userId, rating: p.rating ?? 1000, games, wins, wr };
+    return { userId: p.userId, rating: p.rating ?? 100, games, wins, wr };
   });
 
   rows.sort((a, b) => (b.rating - a.rating) || (b.wr - a.wr));
