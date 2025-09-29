@@ -19,7 +19,7 @@ function chunkArray(arr, size) { const out = []; for (let i=0;i<arr.length;i+=si
 /** ========= LEADERBOARD ========= **/
 export async function refreshLeaderboard(client, guildId) {
   const guild = await client.guilds.fetch(guildId);
-  const ch = await ensureTextChannel(guild, "📊┃leaderboard");
+  const ch = await ensureTextChannel(guild, "🏆┃leaderboard");
 
   const winsAgg = await col("match_players").aggregate([
     { $lookup: { from: "matches", localField: "matchId", foreignField: "matchId", as: "m" } },
@@ -153,7 +153,7 @@ async function buildMatchHistoryEmbed(matchId) {
 
 export async function upsertMatchHistoryMessage(client, guildId, matchId) {
   const guild = await client.guilds.fetch(guildId);
-  const ch = await ensureTextChannel(guild, "🎮┃match-history");
+  const ch = await ensureTextChannel(guild, "📊┃match-history");
   const eb = await buildMatchHistoryEmbed(matchId);
   const match = await col("matches").findOne({ matchId });
   if (!match) return;
