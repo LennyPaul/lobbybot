@@ -19,7 +19,7 @@ function chunkArray(arr, size) { const out = []; for (let i=0;i<arr.length;i+=si
 /** ========= LEADERBOARD ========= **/
 export async function refreshLeaderboard(client, guildId) {
   const guild = await client.guilds.fetch(guildId);
-  const ch = await ensureTextChannel(guild, "📊|leaderboard");
+  const ch = await ensureTextChannel(guild, "📊┃leaderboard");
 
   const winsAgg = await col("match_players").aggregate([
     { $lookup: { from: "matches", localField: "matchId", foreignField: "matchId", as: "m" } },
