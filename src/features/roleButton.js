@@ -98,7 +98,7 @@ export async function handleRulesPanelCommand(interaction) {
   const button = new ButtonBuilder()
     .setCustomId(`accept_roles:${addId}:${remId}`)
     .setLabel(label)
-    .setStyle(addRole && !removeRole ? ButtonStyle.Success : ButtonStyle.Secondary);
+    .setStyle(ButtonStyle.Success);
 
   const row = new ActionRowBuilder().addComponents(button);
 
@@ -195,7 +195,7 @@ export async function handleAcceptRoleButton(interaction) {
     } catch {}
     }
     return true;
-    
+
   }
 
   // Ancien format (compat): accept_role_<roleId> → ajoute uniquement
