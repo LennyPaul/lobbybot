@@ -183,20 +183,19 @@ export async function handleAcceptRoleButton(interaction) {
       return true;
     }
 
-    const partsOut = "";
-    if (roleAdd && roleRem){
-        if(added && removed){
-            partsOut = "Règlement validé"
-        }else{
-            partsOut = 'Problement de role'
-        }
+    try {
+    if (added || removed) {
+        await interaction.reply({ content: "✅ Règlement validé", ephemeral: true });
+    } else {
+        await interaction.reply({ content: "❌ Problème de rôles", ephemeral: true });
     }
-    if (!partsOut.length){
-        partsOut = 'Rien à faire.'
-    } 
-
-    try { await interaction.reply({ content: partsOut , ephemeral: true }); } catch {}
+    } catch {
+    try {
+        await interaction.followUp({ content: "❌ Problème de rôles", ephemeral: true });
+    } catch {}
+    }
     return true;
+    
   }
 
   // Ancien format (compat): accept_role_<roleId> → ajoute uniquement
