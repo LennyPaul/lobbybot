@@ -52,10 +52,10 @@ async function queueEmbedNormal() {
   return new EmbedBuilder()
     .setTitle("File d’attente — Valorant (5v5)")
     .setDescription(
-      `**${count}/10** joueurs en file.\n` +
+      `**${count}/10** joueuses en file.\n` +
       (readyEnabled
         ? "Un **ready-check** sera lancé pour les 10 premiers."
-        : "La partie se **lance automatiquement** dès qu’il y a **10 joueurs**.")
+        : "La partie se **lance automatiquement** dès qu’il y a **10 joueuses**.")
     )
     .setFooter({ text: "Clique sur les boutons pour rejoindre/partir." });
 }
@@ -88,7 +88,7 @@ function rcStatusEmbed(rc) {
   return new EmbedBuilder()
     .setTitle(`Ready-check — ${rc.confirmedIds.length}/10 confirmés`)
     .setDescription(
-      `Chaque joueur a reçu un **DM** avec un bouton “Je suis prêt ✅”.\n` +
+      `Chaque joueuse a reçu un **DM** avec un bouton “Je suis prête ✅”.\n` +
       `**Temps restant : ${secondsLeft}s**\n` +
       `La partie se crée dès que **10/10** sont confirmés.`
     )
@@ -130,7 +130,7 @@ function buildReadyDmRow(rcId) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`rc_confirm_${rcId}`)
-      .setLabel("Je suis prêt ✅")
+      .setLabel("Je suis prête ✅")
       .setStyle(ButtonStyle.Success)
   );
 }
@@ -327,7 +327,7 @@ export async function handleQueueButtons(interaction, client) {
     }
     const userId = interaction.user.id;
     if (!rc.userIds.includes(userId)) {
-      return interaction.reply({ content: "Tu ne fais pas partie de ces 10 joueurs.", ephemeral: true });
+      return interaction.reply({ content: "Tu ne fais pas partie de ces 10 joueuses.", ephemeral: true });
     }
     if (rc.confirmedIds.includes(userId)) {
       return interaction.reply({ content: "Déjà validé ✅", ephemeral: true });
