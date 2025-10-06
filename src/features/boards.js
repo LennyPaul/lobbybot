@@ -50,7 +50,7 @@ export async function refreshLeaderboard(client, guildId) {
     ).join("\n");
     return new EmbedBuilder()
       .setTitle(`Leaderboard — Page ${idx + 1}/${pages.length || 1}`)
-      .setDescription(lines || "_Aucun joueur_");
+      .setDescription(lines || "_Aucune joueuse_");
   });
 
   const cfg = await col("config").findOne({ _id: "leaderboard" }) || {};
