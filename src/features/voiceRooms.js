@@ -133,7 +133,7 @@ export async function createMatchVoiceChannels(guild, matchId, teamAIds = [], te
   const voiceB = await guild.channels.create({
     name: `Match #${matchId} — Équipe B`,
     type: ChannelType.GuildVoice,
-    rtcRegion: "rotterdam",
+    rtcRegion: 'rotterdam',
     parent: category?.id,
     permissionOverwrites: overwritesTeamB,
   });

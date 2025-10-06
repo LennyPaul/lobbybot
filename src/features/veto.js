@@ -322,7 +322,7 @@ const voteMsg = await thread.send({
       .setTitle(`Match #${matchId} — Lancement !`)
       .setDescription(
         `**Bonne game à tous !** 🎮\n` +
-        `Le **capitaine de l'équipe A** crée le lobby et envoie le code dans ce chanell\n` +
+        `Le **capitaine de l'équipe A** crée le lobby et envoie le code dans ce chanel\n` +
         `À la fin de la partie, **seuls les CAPITAINES** votent ci-dessous.\n` +
         `- Si les 2 votes **coïncident**, la victoire est validée automatiquement.\n` +
         `- En cas de **désaccord**, le match part en **review admin**.`
